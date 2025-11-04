@@ -2,10 +2,19 @@
 AI Hand-Controlled Cursor for Windows
 Controls the Windows mouse cursor using right hand gestures detected via webcam.
 
+Features:
+- Cursor Movement: Index finger controls mouse cursor with smooth movement
+- Left Click: Pinch thumb and index finger together
+- Auto-Scrolling: Raise index and middle fingers to continuously scroll down
+- Browser Back: While scrolling, swipe right to trigger Alt + Left Arrow
+
 Installation:
     pip install -r requirements.txt
     or
     pip install opencv-python mediapipe pyautogui numpy
+    
+Usage:
+    python hand_cursor_control.py
 """
 
 import cv2  # type: ignore
@@ -21,12 +30,16 @@ import time
 # Pinch detection threshold (normalized distance between thumb and index tip)
 PINCH_THRESHOLD = 0.04
 
-# Scroll sensitivity (pixels of movement required to trigger scroll)
-SCROLL_SENSITIVITY = 50
+# Scroll speed (scroll units per scroll action - higher = faster)
+SCROLL_SPEED = 10
+
+# Swipe gesture threshold (normalized distance for horizontal swipe detection)
+SWIPE_THRESHOLD = 0.15  # How far right you need to swipe (0.0 to 1.0)
 
 # Debounce times (in seconds) to prevent multiple rapid actions
 CLICK_DEBOUNCE_TIME = 0.5
-SCROLL_DEBOUNCE_TIME = 0.1
+SCROLL_INTERVAL = 0.05  # Time between scroll actions (seconds) - lower = faster scrolling
+SWIPE_DEBOUNCE_TIME = 0.5  # Time between swipe gestures (seconds)
 
 # Smoothing factor for cursor movement (0.0 to 1.0, higher = smoother)
 CURSOR_SMOOTHING = 0.85
@@ -157,6 +170,8 @@ def main():
     last_scroll_y = None
     last_scroll_time = 0
     last_cursor_pos = None
+    last_swipe_time = 0
+    scroll_initial_x = None  # Track initial finger position when scroll gesture starts
     
     # Disable PyAutoGUI failsafe (optional, can be enabled for safety)
     pyautogui.FAILSAFE = False
@@ -224,6 +239,10 @@ def main():
                         
                         # Gesture: Scroll (Index + Middle fingers up)
                         if is_scroll_gesture(landmarks):
+                            # Initialize scroll tracking position if not set
+                            if scroll_initial_x is None:
+                                scroll_initial_x = index_tip.x
+                            
                             # Show "Scrolling active" message when gesture is detected
                             cv2.putText(
                                 frame, 
@@ -235,23 +254,33 @@ def main():
                                 2
                             )
                             
-                            # Initialize scroll tracking if not already set (e.g., when switching from cursor mode)
-                            if last_scroll_y is None:
-                                last_scroll_y = index_tip.y
-                            
                             current_time = time.time()
                             
-                            # Calculate scroll amount based on vertical movement
-                            y_delta = (index_tip.y - last_scroll_y) * screen_height
+                            # Check for horizontal swipe to the right (browser back gesture)
+                            horizontal_delta = index_tip.x - scroll_initial_x
                             
-                            if abs(y_delta) > SCROLL_SENSITIVITY:
-                                if current_time - last_scroll_time > SCROLL_DEBOUNCE_TIME:
-                                    scroll_amount = int(-y_delta / 10)  # Negative for natural scrolling
-                                    pyautogui.scroll(scroll_amount)
+                            if horizontal_delta > SWIPE_THRESHOLD:
+                                # Swipe right detected - trigger browser back (Alt + Left Arrow)
+                                if current_time - last_swipe_time > SWIPE_DEBOUNCE_TIME:
+                                    pyautogui.hotkey('alt', 'left')
+                                    last_swipe_time = current_time
+                                    scroll_initial_x = index_tip.x  # Reset initial position
+                                    
+                                    # Visual feedback
+                                    cv2.putText(
+                                        frame, 
+                                        "BROWSER BACK", 
+                                        (10, 70), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 
+                                        1, 
+                                        (255, 255, 0), 
+                                        2
+                                    )
+                            else:
+                                # Continuously scroll down while gesture is active (no horizontal swipe)
+                                if current_time - last_scroll_time > SCROLL_INTERVAL:
+                                    pyautogui.scroll(-SCROLL_SPEED)  # Negative for scrolling down
                                     last_scroll_time = current_time
-                            
-                            # Always update last_scroll_y for continuous tracking
-                            last_scroll_y = index_tip.y
                         
                         # Gesture: Click (Pinch)
                         elif pinch and index_up:
@@ -273,9 +302,11 @@ def main():
                                 )
                             
                             last_scroll_y = None  # Reset scroll tracking
+                            scroll_initial_x = None  # Reset swipe tracking
                         
                         # Gesture: Cursor Movement (Index finger up only)
                         elif index_up and not middle_up:
+                            scroll_initial_x = None  # Reset swipe tracking
                             # Map index fingertip to screen coordinates
                             screen_x, screen_y = map_to_screen(
                                 frame_width, 
@@ -322,9 +353,10 @@ def main():
                             last_scroll_y = None  # Reset scroll tracking
                         
                         else:
-                            # No active gesture
+                            # No active gesture - reset scroll tracking
                             last_scroll_y = None
                             last_cursor_pos = None
+                            scroll_initial_x = None  # Reset swipe tracking
                     else:
                         # Left hand detected, ignore
                         cv2.putText(
